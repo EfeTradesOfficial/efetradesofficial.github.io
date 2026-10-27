@@ -240,6 +240,17 @@ textarea{min-height:90px;resize:vertical}
 
   <div id="setupArea" hidden></div>
 
+  <section id="lockArea" hidden aria-label="Şifreli günlük">
+    <div class="empty" style="text-align:left;max-width:440px;margin:24px auto 0">
+      <h3>Bu günlük şifreli</h3>
+      <p style="margin:0 0 14px">İşlemleri görmek için görüntüleme şifresini gir.</p>
+      <form id="vf"><label>Şifre<input id="f_view" type="password" autocomplete="current-password" required></label>
+        <p class="err" id="vErr" hidden></p>
+        <div class="formbar" style="margin-top:12px"><button class="btn primary" type="submit" id="vBtn">Aç</button></div></form>
+    </div>
+    <p style="text-align:center;margin-top:18px"><button type="button" class="btn ghost" id="lockOwner">Sahip girişi</button></p>
+  </section>
+
   <div id="journal">
     <div class="tabs" role="tablist" aria-label="Görünüm">
       <button type="button" class="tab" role="tab" id="tabBtnTrades" aria-selected="true" aria-controls="tabTrades">İşlemler</button>
@@ -335,7 +346,8 @@ function applyTheme(t){
 try{const c=JSON.parse(localStorage.getItem(THEME_LS)||"null");if(c)savedTheme=validTheme(c)}catch(e){}
 applyTheme(savedTheme);
 function setSavedTheme(t){savedTheme=validTheme(t);applyTheme(savedTheme);try{localStorage.setItem(THEME_LS,JSON.stringify(savedTheme))}catch(e){}}
-const KEY_LS="tg-sahip-sifre", CACHE_LS="tg-onbellek";
+const KEY_LS="tg-sahip-sifre", CACHE_LS="tg-onbellek", VIEW_LS="tg-gorme-sifre";
+let viewKey=null;try{viewKey=localStorage.getItem("tg-gorme-sifre")}catch(e){}
 
 let trades=[]; let ownerKey=null;
 let filter={kind:"all",value:null};
@@ -359,8 +371,10 @@ const OUT_LABEL={win:"Kazanç",loss:"Kayıp",be:"Başa baş",open:"Açık / sonu
 
 /* ---------- API ---------- */
 async function apiGet(){
-  const r=await fetch(API_URL+"?action=list",{method:"GET"});
-  const j=await r.json(); if(!j.ok) throw new Error(j.error||"Okunamadı"); return j;
+  const r=await fetch(API_URL+"?action=list&g="+encodeURIComponent(viewKey||""),{method:"GET"});
+  const j=await r.json();
+  if(!j.ok){const e=new Error(j.error||"Okunamadı");if(j.error==="locked"){e.locked=true;e.theme=j.theme}throw e}
+  return j;
 }
 async function apiPost(body){
   const r=await fetch(API_URL,{method:"POST",body:JSON.stringify({...body,key:ownerKey})});
@@ -371,12 +385,13 @@ async function apiPost(body){
 async function load(){
   try{
     const j=ownerKey?await apiPost({action:"list"}):await apiGet();
-    trades=j.trades||[]; if(!ownerKey) lsSet(CACHE_LS,JSON.stringify(trades));
+    trades=j.trades||[];
     if(j.theme&&$("sheet").hidden)setSavedTheme(j.theme);
     Music.configure(j.settings&&j.settings.music);
-    $("notice").hidden=true; render();
+    $("notice").hidden=true; hideLock(); render();
   }catch(e){
     if(e.auth){logout();showNotice("Şifre artık geçerli değil. Tekrar giriş yap.");return}
+    if(e.locked){showLock(e.theme);return}
     showNotice("İşlemlere şu an ulaşılamıyor. İnternet bağlantını kontrol edip sayfayı yenile.");
     render();
   }
@@ -861,7 +876,7 @@ const Music={
   },
   async songUrl(id){
     if(this.songs[id])return this.songs[id];
-    const r=await fetch(API_URL+"?action=music&v="+encodeURIComponent(id));const j=await r.json();
+    const r=await fetch(API_URL+"?action=music&v="+encodeURIComponent(id)+"&g="+encodeURIComponent(ownerKey||viewKey||""));const j=await r.json();
     if(!j.ok)throw new Error(j.error||"Şarkı alınamadı");
     const bin=atob(j.b64);const u8=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);
     return this.songs[id]=URL.createObjectURL(new Blob([u8],{type:j.mime||"audio/mpeg"}));
@@ -979,6 +994,26 @@ function openMusicSettings(){
     catch(e){b.disabled=false;b.textContent="Herkes için kaydet";err.textContent=e.auth?"Şifre geçersiz. Tekrar giriş yap.":"Kaydedilemedi. Code.gs'in son sürümünü yükleyip yeniden dağıttığından emin ol.";err.hidden=false}};
 }
 
+/* ---------- görüntüleme şifresi ---------- */
+let lockShown=false;
+function showLock(theme,wrong){
+  if(theme)setSavedTheme(theme);
+  trades=[];lockShown=true;
+  $("journal").hidden=true;$("lockArea").hidden=false;$("musicBox").hidden=true;
+  if(Music.on)Music.stop(true);
+  $("countSub").textContent="Şifreli günlük";
+  const err=$("vErr");
+  if(wrong){err.textContent="Şifre yanlış.";err.hidden=false}else err.hidden=true;
+  const b=$("vBtn");b.disabled=false;b.textContent="Aç";
+  setTimeout(()=>{try{$("f_view").focus()}catch(e){}},50);
+}
+function hideLock(){if(!lockShown)return;lockShown=false;$("lockArea").hidden=true;$("journal").hidden=false;Music.configure(Music.cfg)}
+$("vf").onsubmit=async ev=>{ev.preventDefault();const v=$("f_view").value;if(!v)return;const b=$("vBtn");b.disabled=true;b.textContent="Kontrol ediliyor…";
+  const prev=viewKey;viewKey=v;
+  try{const j=await apiGet();lsSet(VIEW_LS,v);$("f_view").value="";trades=j.trades||[];if(j.theme)setSavedTheme(j.theme);Music.configure(j.settings&&j.settings.music);hideLock();render()}
+  catch(e){viewKey=prev;if(e.locked)showLock(null,true);else{b.disabled=false;b.textContent="Aç";$("vErr").textContent="Sunucuya ulaşılamadı. Bağlantını kontrol et.";$("vErr").hidden=false}}};
+$("lockOwner").onclick=openLogin;
+
 /* ---------- başlat ---------- */
 function showSetup(){
   $("journal").hidden=true;$("countSub").textContent="Kurulum bekleniyor";
@@ -1000,7 +1035,7 @@ if(location.hash==="#gecmis"||location.hash==="#takvim")setTab("gecmis");
 $("logout").onclick=logout;
 if(!API_URL){showSetup();return}
 const k=lsGet(KEY_LS);if(k)setOwner(k);
-if(!k){try{const c=JSON.parse(lsGet(CACHE_LS)||"null");if(Array.isArray(c)&&c.length){trades=c;render()}}catch(e){}}
+lsSet(CACHE_LS,null);
 load();
 })();
 </script>
