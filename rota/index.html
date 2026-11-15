@@ -72,7 +72,7 @@ nav svg{width:21px;height:21px}
 .why{font-size:.78rem;color:var(--muted);margin:3px 0 8px;line-height:1.4}
 .x{border:0;background:none;color:var(--muted);font-size:1.1rem;cursor:pointer;padding:0 4px;font-family:inherit;font-weight:700}
 .row{display:flex;gap:6px;margin-top:8px}
-input[type=text],select,input[type=time]{background:var(--card2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:9px 11px;font:inherit;font-size:.85rem;min-width:0}
+input[type=text],input[type=password],select,input[type=time]{background:var(--card2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:9px 11px;font:inherit;font-size:.85rem;min-width:0}
 input[type=text]{flex:1}
 .btn{border:0;background:var(--accent);color:var(--accentText);font:inherit;font-weight:700;font-size:.85rem;border-radius:10px;padding:9px 13px;cursor:pointer}
 .btn.ghost{background:var(--card2);color:var(--text);border:1px solid var(--line)}
@@ -487,27 +487,45 @@ st.books=st.books||{};st.ovr=st.ovr||{};st.tpl=st.tpl||{};st.checks=st.checks||{
 const ui={mode:LS.get('mode',null)||((window.innerWidth||0)>=900?'desk':'mobile'),tab:LS.get('tab','bugun'),wk:0,sel:null,open:{},cal:false,modal:null,draft:null,gen:{},pending:null,sync:'yerel'};
 
 function persist(){const o={};PKEYS.forEach(k=>o[k]=st[k]);return o}
-let SURL=LS.get('surl',''),STOK=LS.get('stok',''),pushT=null,pushing=false,again=false;
-function save(){st.updatedAt=Date.now();LS.set('state',persist());if(SURL){clearTimeout(pushT);pushT=setTimeout(push,1500)}}
+const API_URL=''; // Rota Apps Script /exec adresi (Sheets eşitlemesi için)
+const OWNER_LS='tg-sahip-sifre'; // Trade Günlüğü sahip şifresi
+let SURL=API_URL,STOK='',pushT=null,pushing=false,again=false;
+ui.locked=true;ui.lockErr='';ui.gating=true;
+function ownerKey(){try{return localStorage.getItem(OWNER_LS)}catch(e){return null}}
+function save(){st.updatedAt=Date.now();if(ui.locked)return;LS.set('state',persist());if(SURL&&STOK){clearTimeout(pushT);pushT=setTimeout(push,1500)}}
 function dailyRows(){const t=today(),out=[];let d=fromKey(st.start);
  for(let i=0;i<3650&&d<=t;i++){const c=st.checks[key(d)]||[];out.push([key(d),Math.round(dayPct(d)*100),c.includes('defter')?'✓':'']);d.setDate(d.getDate()+1)}return out}
 function goalRows(){const H={k:'Kısa',o:'Orta',u:'Uzun'};return st.goals.map(g=>{const n=g.steps.filter(x=>x.d).length;
  return [H[g.h],g.title,n+'/'+g.steps.length,g.steps.length?Math.round(n/g.steps.length*100):0]})}
-async function push(){if(!SURL)return;if(pushing){again=true;return}pushing=true;
+async function push(){if(!SURL||!STOK||ui.locked)return;if(pushing){again=true;return}pushing=true;
  try{const r=await fetch(SURL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({token:STOK,state:persist(),daily:dailyRows(),goals:goalRows()})});
   const j=await r.json();ui.sync=j.ok?'sheets':'hata'}catch(e){ui.sync='hata'}
  pushing=false;if(again){again=false;push()}
  const s=document.querySelector('.sync');if(s)s.textContent=syncText()}
-async function sheetsLoad(){if(!SURL){ui.sync='yerel';return}
+function deny(msg){ui.locked=true;ui.gating=false;ui.lockErr=msg||'';render()}
+async function gate(){const k=ownerKey();
+ if(!k){location.replace('../');return deny('Rota, Trade Günlüğü sahip girişiyle açılır.')}
+ if(!API_URL){STOK=k;ui.locked=false;ui.gating=false;ui.sync='yerel';render();return}
+ try{const r=await fetch(API_URL+'?action=get&token='+encodeURIComponent(k));const j=await r.json();
+  if(!j.ok)return deny("Rota'nın Google Sheets şifresi, Trade Günlüğü sahip şifrenle aynı değil. Code.gs'teki TOKEN satırını kontrol et.");
+  STOK=k;if(j.state&&(j.state.updatedAt||0)>(st.updatedAt||0)){PKEYS.forEach(x=>{if(j.state[x]!==undefined)st[x]=j.state[x]});LS.set('state',persist())}
+  ui.locked=false;ui.gating=false;ui.sync='sheets';render();if(!j.state||(st.updatedAt||0)>(j.state.updatedAt||0))push()}
+ catch(e){ // çevrimdışı: bu cihazda daha önce açıldıysa yerel kopyayla aç
+  if(LS.get('state',null)){STOK=k;ui.locked=false;ui.gating=false;ui.sync='hata';render()}else deny('Sunucuya ulaşılamadı. İnternet bağlantını kontrol et.')}}
+async function sheetsLoad(){if(ui.locked||!SURL||!STOK||pushing)return;
  try{const r=await fetch(SURL+'?action=get&token='+encodeURIComponent(STOK));const j=await r.json();
-  if(!j.ok){ui.sync='hata';render();return}
-  if(j.state&&(j.state.updatedAt||0)>(st.updatedAt||0)){PKEYS.forEach(k=>{if(j.state[k]!==undefined)st[k]=j.state[k]});LS.set('state',persist())}
-  else push();
-  ui.sync='sheets'}catch(e){ui.sync='hata'}
- render()}
-function syncText(){return ui.sync==='sheets'?'☁︎ Google Sheets ile eşitleniyor':ui.sync==='hata'?'⚠︎ Google Sheets bağlantısı kurulamadı (Tema > Google Sheets)':'Bu cihazda kaydediliyor'}
-setTimeout(sheetsLoad,50);
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&SURL&&!pushing)sheetsLoad()});
+  if(!j.ok){ui.sync='hata';return}
+  if(j.state&&(j.state.updatedAt||0)>(st.updatedAt||0)){PKEYS.forEach(k=>{if(j.state[k]!==undefined)st[k]=j.state[k]});LS.set('state',persist());if(!ui.modal&&!document.querySelector('input:focus,textarea:focus'))render()}
+  ui.sync='sheets'}catch(e){ui.sync='hata'}}
+function syncText(){return ui.sync==='sheets'?'☁︎ Google Sheets ile eşitleniyor':ui.sync==='hata'?'⚠︎ Google Sheets bağlantısı kurulamadı':'Bu cihazda kaydediliyor'}
+function renderLock(){document.body.classList.remove('desk');const nv=document.querySelector('nav');if(nv)nv.style.display='none';
+ document.getElementById('app').innerHTML=ui.gating?`<p class="muted" style="text-align:center;margin-top:30vh">Rota açılıyor…</p>`:
+ `<div class="card" style="max-width:400px;margin:14vh auto 0;padding:22px"><h1>Rota<span style="color:var(--accent)">.</span></h1>
+ <p class="small" style="margin:10px 0 16px;line-height:1.5">${esc(ui.lockErr)}</p>
+ <a class="btn" href="../" style="display:block;text-align:center;text-decoration:none">← Trade Günlüğü'ne dön</a></div>`}
+function showApp(){const nv=document.querySelector('nav');if(nv)nv.style.display=''}
+setTimeout(gate,30);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState!=='visible')return;if(!ownerKey()){location.replace('../');return}sheetsLoad()});
 
 // ================= HELPERS =================
 const toMin=s=>{const[h,m]=String(s).split(':').map(Number);return h*60+(m||0)};
@@ -755,10 +773,7 @@ function vTema(){
  <h2>Yazı boyutu</h2><div class="card"><input type="range" min="14" max="19" step="1" value="${t.fs||16}" id="fs"><p class="muted small" style="margin-top:6px">Aa — ${t.fs||16}px</p></div>
  <h2>Program</h2><div class="card"><p class="small muted">Haftanın günlerine yaptığın kalıcı değişiklikleri ve tarih bazlı özelleştirmeleri sıfırlar.</p>
  <button class="btn danger" data-reset="p" style="margin-top:10px">${ui.pending==='p'?'Emin misin? Tekrar bas':'Programı varsayılana döndür'}</button></div>
- <h2>Google Sheets</h2><div class="card"><p class="small muted">Apps Script web uygulaması adresini ve kendi belirlediğin şifreyi gir. Böylece verilerin tablona yazılır ve başka cihazlardan da görünür.</p>
- <input type="text" id="surl" placeholder="https://script.google.com/macros/s/…/exec" value="${esc(SURL)}" style="width:100%;margin-top:8px">
- <input type="text" id="stok" placeholder="Şifre (Apps Script'teki TOKEN)" value="${esc(STOK)}" style="width:100%;margin-top:6px">
- <div class="tools"><button class="btn" data-act="sconnect">Bağlan</button>${SURL?'<button class="btn ghost" data-act="sdisconnect">Bağlantıyı kes</button>':''}</div>
+ <h2>Giriş ve eşitleme</h2><div class="card"><p class="small muted">Rota, Trade Günlüğü'ne sahip olarak giriş yaptığında açılır. Trade Günlüğü'nden çıkış yaparsan Rota da kapanır.</p>
  <p class="small" style="margin-top:8px">${syncText()}</p></div>
  <h2>Veri</h2><div class="card"><p class="small muted">Veriler bu tarayıcıda saklanır${SURL?' ve Google Sheets ile eşitlenir':''}.</p>
  <div class="tools"><button class="btn ghost" data-act="export">Verileri kopyala</button></div>
@@ -841,12 +856,12 @@ const TABS=[
 ];
 let lastTab=null;
 function render(){
- applyTheme();document.body.classList.toggle('desk',ui.mode==='desk');
+ applyTheme();if(ui.locked){renderLock();return}showApp();document.body.classList.toggle('desk',ui.mode==='desk');
  const v={bugun:vBugun,hedef:vHedef,pano:vPano,takip:vTakip,rehber:vRehber,tema:vTema}[ui.tab]||vBugun;
- document.getElementById('app').innerHTML=(ui.mode==='desk'?'':'<div class="topbar"><button class="modebtn" data-act="mode">🖥 Masaüstü modu</button></div>')+v()+`<p class="sync">${syncText()}</p>`;
+ document.getElementById('app').innerHTML=(ui.mode==='desk'?'':'<div class="topbar" style="gap:6px"><a class="modebtn" href="../" style="text-decoration:none">📈 Trade Günlüğü</a><button class="modebtn" data-act="mode">🖥 Masaüstü modu</button></div>')+v()+`<p class="sync">${syncText()}</p>`;
  document.getElementById('nav').innerHTML=TABS.map(([k,n,ic])=>`<button class="${ui.tab===k?'on':''}" data-tab="${k}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ic}</svg>${n}</button>`).join('');
  if(ui.mode==='desk'){const nv=document.getElementById('nav');nv.insertAdjacentHTML('afterbegin','<div class="brand">Rota<span>.</span></div>');
-  nv.insertAdjacentHTML('beforeend','<div class="navfoot"><button data-act="mode" style="width:100%">📱 Telefon modu</button><span class="muted">'+new Date().toLocaleDateString('tr-TR',{weekday:'long',day:'numeric',month:'long'})+'</span></div>')}
+  nv.insertAdjacentHTML('beforeend','<div class="navfoot"><a href="../" style="display:flex;gap:12px;align-items:center;color:var(--muted);text-decoration:none;font-size:.88rem;font-weight:700;padding:10px 12px">📈 Trade Günlüğü</a><button data-act="mode" style="width:100%">📱 Telefon modu</button><span class="muted">'+new Date().toLocaleDateString('tr-TR',{weekday:'long',day:'numeric',month:'long'})+'</span></div>')}
  groupCols();
  if(ui.tab==='pano'){const fs=document.querySelectorAll('.fill');
   if(lastTab!=='pano'){requestAnimationFrame(()=>setTimeout(()=>fs.forEach(f=>f.style.width=f.dataset.p+'%'),120))}
@@ -895,8 +910,6 @@ document.addEventListener('click',e=>{
   case 'clearovr':delete st.ovr[ui.draft.k];save();ui.modal=null;renderModal();render();break;
   case 'cleartpl':delete st.tpl[fromKey(ui.draft.k).getDay()];delete st.ovr[ui.draft.k];save();ui.modal=null;renderModal();render();break;
   case 'mode':ui.mode=ui.mode==='desk'?'mobile':'desk';LS.set('mode',ui.mode);render();scrollTo(0,0);break;
-  case 'sconnect':SURL=document.getElementById('surl').value.trim();STOK=document.getElementById('stok').value.trim();LS.set('surl',SURL);LS.set('stok',STOK);ui.sync='yerel';el.textContent='Bağlanıyor…';sheetsLoad();break;
-  case 'sdisconnect':SURL='';STOK='';LS.set('surl','');LS.set('stok','');ui.sync='yerel';render();break;
   case 'accreset':st.theme.accent=null;save();render();break;
   case 'export':{const txt=JSON.stringify(persist());
    const fb=()=>{const b=document.getElementById('impbox');if(b){b.value=txt;b.select()}el.textContent='Aşağıdaki kutudan kopyala'};
